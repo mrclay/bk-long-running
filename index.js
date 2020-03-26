@@ -41,22 +41,34 @@ async function go() {
   await pagedGet(
     `${ROOT}/organizations/${process.env.BK_ORG}/pipelines`,
     {},
-    pipelines => {
+    async pipelines => {
       for (const pipeline of pipelines) {
-        const { web_url, steps, provider, name } = pipeline;
-        const repo = 'https://github.com/' + provider.settings.repository;
+        const { web_url, steps, provider, name, builds_url } = pipeline;
+        const repo = `https://github.com/${provider.settings.repository}/tree/master/.buildkite`;
         if (!steps.length) {
           continue;
         }
 
-        const uses_yaml =
-          steps[0].command === 'buildkite-agent pipeline upload';
+        const uses_yaml = steps[0].command.includes(
+          'buildkite-agent pipeline upload',
+        );
         if (!uses_yaml) {
-          allPipelines.push({
+          const item = {
             name: name.trim(),
-            web_url,
+            web_url: `${web_url}/settings`,
             repo,
-          });
+            last_build: '',
+            build_url: '',
+          };
+
+          const lastBuild = await get(builds_url, { per_page: 1 });
+          if (lastBuild && lastBuild[0]) {
+            const { started_at, web_url } = lastBuild[0];
+            item.last_build = started_at;
+            item.build_url = web_url;
+          }
+
+          allPipelines.push(item);
         }
       }
     },
@@ -65,17 +77,19 @@ async function go() {
   let csvWriter = createObjectCsvWriter({
     path: `${__dirname}/output/repos.csv`,
     header: [
-      {id: 'name', title: 'Pipeline Name'},
-      {id: 'web_url', title: 'URL'},
-      {id: 'repo', title: 'Repo URL'},
-    ]
+      { id: 'name', title: 'Pipeline Name' },
+      { id: 'web_url', title: 'Settings URL' },
+      { id: 'repo', title: 'Repo .buildkite URL' },
+      { id: 'last_build', title: 'Last build started' },
+      { id: 'build_url', title: 'Last build URL' },
+    ],
   });
   await csvWriter.writeRecords(allPipelines);
 
   await pagedGet(
     `${ROOT}/organizations/${process.env.BK_ORG}/builds`,
     { state: 'running' },
-    builds => {
+    async builds => {
       for (const build of builds) {
         const { web_url: build_url, creator, started_at } = build;
         const elapsed = new Date().getTime() - new Date(started_at).getTime();
@@ -94,10 +108,10 @@ async function go() {
   csvWriter = createObjectCsvWriter({
     path: `${__dirname}/output/long-running.csv`,
     header: [
-      {id: 'build_url', title: 'Build URL'},
-      {id: 'email', title: 'Creator Email'},
-      {id: 'name', title: 'Creator Name'},
-    ]
+      { id: 'build_url', title: 'Build URL' },
+      { id: 'email', title: 'Creator Email' },
+      { id: 'name', title: 'Creator Name' },
+    ],
   });
   await csvWriter.writeRecords(longBuilds);
 }
