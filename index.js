@@ -3,6 +3,7 @@ require('dotenv').config();
 const fetch = require('node-fetch');
 const fs = require('fs');
 const qs = require('querystring');
+const { createObjectCsvWriter } = require('csv-writer');
 
 const ROOT = 'https://api.buildkite.com/v2';
 
@@ -42,7 +43,7 @@ async function go() {
     {},
     pipelines => {
       for (const pipeline of pipelines) {
-        const { slug, web_url, steps, provider, name } = pipeline;
+        const { web_url, steps, provider, name } = pipeline;
         const repo = 'https://github.com/' + provider.settings.repository;
         if (!steps.length) {
           continue;
@@ -52,7 +53,6 @@ async function go() {
           steps[0].command === 'buildkite-agent pipeline upload';
         if (!uses_yaml) {
           allPipelines.push({
-            slug,
             name: name.trim(),
             web_url,
             repo,
@@ -61,6 +61,16 @@ async function go() {
       }
     },
   );
+
+  let csvWriter = createObjectCsvWriter({
+    path: `${__dirname}/output/repos.csv`,
+    header: [
+      {id: 'name', title: 'Pipeline Name'},
+      {id: 'web_url', title: 'URL'},
+      {id: 'repo', title: 'Repo URL'},
+    ]
+  });
+  await csvWriter.writeRecords(allPipelines);
 
   await pagedGet(
     `${ROOT}/organizations/${process.env.BK_ORG}/builds`,
@@ -81,19 +91,15 @@ async function go() {
     },
   );
 
-  let md = '';
-
-  md += `\n## long-running builds\n\n`;
-  longBuilds.forEach(b => {
-    md += `* ${b.build_url} ([${b.name}](mailto:${b.email}))\n`;
+  csvWriter = createObjectCsvWriter({
+    path: `${__dirname}/output/long-running.csv`,
+    header: [
+      {id: 'build_url', title: 'Build URL'},
+      {id: 'email', title: 'Creator Email'},
+      {id: 'name', title: 'Creator Name'},
+    ]
   });
-
-  md += '\n## unconverted repos\n\n';
-  allPipelines.forEach(p => {
-    md += `* **[${p.name}](${p.repo})** - [pipeline](${p.web_url})\n`;
-  });
-
-  fs.writeFileSync(`${__dirname}/${process.env.OUT}`, md);
+  await csvWriter.writeRecords(longBuilds);
 }
 
 go().catch(e => console.error(e));
