@@ -6,8 +6,8 @@ const qs = require('querystring');
 
 const ROOT = 'https://api.buildkite.com/v2';
 
-async function get(url, get = null) {
-  const fullUrl = url + (get ? `?${qs.stringify(get)}` : '');
+async function get(url, query = null) {
+  const fullUrl = url + (query ? `?${qs.stringify(query)}` : '');
   console.info(`Fetching: ${fullUrl}`);
   const res = await fetch(fullUrl, {
     headers: {'Authorization': `Bearer ${process.env.BK_TOKEN}`},
@@ -15,22 +15,29 @@ async function get(url, get = null) {
   return res.json();
 }
 
+async function pagedGet(url, query = {}, func) {
+  let page = 1;
+  while (true) {
+    const data = await get(url, {
+      ...query,
+      per_page: query.per_page || 100,
+      page,
+    });
+
+    if (Array.isArray(data) && data.length) {
+      await func(data, page);
+      page++;
+    } else {
+      break;
+    }
+  }
+}
+
 async function go() {
   const allPipelines = [];
   const longBuilds = [];
 
-  let page = 1;
-  while (true) {
-    const pipelines = await get(`${ROOT}/organizations/${process.env.BK_ORG}/pipelines`, {
-      per_page: 100,
-      page,
-    });
-    page++;
-
-    if (!Array.isArray(pipelines) || !pipelines.length) {
-      break;
-    }
-
+  await pagedGet(`${ROOT}/organizations/${process.env.BK_ORG}/pipelines`, {}, pipelines => {
     for (const pipeline of pipelines) {
       const { slug, web_url, steps, provider, name } = pipeline;
       const repo = 'https://github.com/' + provider.settings.repository;
@@ -48,21 +55,9 @@ async function go() {
         });
       }
     }
-  }
+  });
 
-  page = 1;
-  while (true) {
-    const builds = await get(`${ROOT}/organizations/${process.env.BK_ORG}/builds`, {
-      per_page: 100,
-      page,
-      state: 'running',
-    });
-    page++;
-
-    if (!Array.isArray(builds) || !builds.length) {
-      break;
-    }
-
+  await pagedGet(`${ROOT}/organizations/${process.env.BK_ORG}/builds`, { state: 'running' }, builds => {
     for (const build of builds) {
       const { web_url: build_url, creator, started_at } = build;
       const elapsed = new Date().getTime() - new Date(started_at).getTime();
@@ -75,7 +70,7 @@ async function go() {
         });
       }
     }
-  }
+  });
 
   let md = '';
 
@@ -86,7 +81,7 @@ async function go() {
 
   md += '\n## unconverted repos\n\n';
   allPipelines.forEach(p => {
-    md += `* **${p.name}** [pipeline](${p.web_url}) | [repo](${p.repo})\n`;
+    md += `* **[${p.name}](${p.repo})** - [pipeline](${p.web_url})\n`;
   });
 
   fs.writeFileSync(`${__dirname}/${process.env.OUT}`, md);
